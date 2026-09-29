@@ -103,14 +103,14 @@ impl Market {
                 continue;
             }
 
-            if let Some(level) = self.sells.get(&key) {
-                if !level.is_empty() {
-                    self.best_sell = *key;
-                    return;
-                }
+            let Some(level) = self.sells.get(&key) else {
+                continue;
+            };
+            if !level.is_empty() {
+                self.best_sell = *key;
+                return;
             }
         }
-
         self.best_sell = 0;
     }
 
@@ -144,13 +144,15 @@ impl Market {
                 continue;
             }
 
-            if let Some(level) = self.buys.get(&key) {
-                if !level.is_empty() {
-                    self.best_buy = key;
-                    return;
-                }
+            let Some(level) = self.buys.get(&key) else {
+                continue;
+            };
+            if !level.is_empty() {
+                self.best_buy = key;
+                return;
             }
         }
+        self.best_buy = 0;
     }
 
     fn push_to_level(level: &mut Vec<u32>, amount: &mut u32, price: &u32) {
@@ -229,6 +231,8 @@ fn main() {
     market.buy(12, 9);
     println!("market {}", market);
     market.sell(12, 5);
+    println!("market {}", market);
+    market.sell(100, 1);
     println!("market {}", market);
     // market.sell(12, 3); // 12 at 3
     // market.sell(15, 5); // 15 at 5
