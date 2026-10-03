@@ -1,29 +1,80 @@
 use std::{
-    cmp::{self, max, min},
-    collections::{HashMap, VecDeque},
+    cmp::min,
+    collections::{BTreeMap, HashMap, VecDeque},
     fmt::Display,
-    u32,
 };
 
 use uuid::Uuid;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Level {
     price: Price,
+    total_amount: u32,
+    orders: VecDeque<OrderId>,
+}
+
+impl Level {
+    fn matching(&mut self, orders: &mut BTreeMap<OrderId, Order>, amount: &mut u32) -> MatchResult {
+        println!("matching level: {:?}", self);
+        if self.orders.is_empty() {
+            return MatchResult::None;
+        }
+
+        let mut matched = vec![];
+        let mut matched_ids = vec![];
+
+        for (id, order_id) in self.orders.iter().enumerate() {
+            if *amount == 0 {
+                break;
+            }
+
+            if let Some(order) = orders.get_mut(&order_id) {
+                let taker_amount = min(order.amount, *amount);
+                let total_amount = order.amount;
+
+                order.amount -= taker_amount;
+                *amount -= taker_amount;
+                self.total_amount -= taker_amount;
+
+                println!("matched order {:?}, taker_amount: {}", order, taker_amount);
+
+                matched.push(Fill {
+                    order_id: order.id,
+                    price: self.price,
+                    total_amount,
+                    amount: taker_amount,
+                });
+                matched_ids.push(id);
+            } else {
+                println!("not found: {}", order_id);
+            }
+        }
+
+        for id in matched_ids {
+            self.orders.remove(id);
+        }
+
+        if matched.is_empty() {
+            return MatchResult::None;
+        }
+
+        MatchResult::Matched(matched)
+    }
 }
 
 type OrderId = uuid::Uuid;
 type Price = u32;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Side {
     Buy,
     Sell,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Order {
     id: OrderId,
+    side: Side,
     price: Price,
     amount: u32,
 }
@@ -36,36 +87,53 @@ struct OrderIntent {
 }
 
 #[derive(Debug)]
+struct Fill {
+    order_id: OrderId,
+    price: u32,
+    total_amount: u32,
+    amount: u32,
+}
+
+#[derive(Debug)]
+struct PlacementResult {
+    order: Order,
+    fills: Option<Vec<Order>>,
+}
+
+#[derive(Debug)]
 enum MatchResult {
-    Matched(Vec<OrderId>),
+    Matched(Vec<Fill>),
     None,
 }
 
 #[derive(Debug)]
-struct Market {
-    orders_ids: HashMap<OrderId, Order>,
+struct Book {
+    orders: BTreeMap<OrderId, Order>,
 
-    buys: HashMap<Price, VecDeque<OrderId>>,
-    sells: HashMap<Price, VecDeque<OrderId>>,
+    buys: BTreeMap<Price, Level>,
+    sells: BTreeMap<Price, Level>,
 
     best_sell: u32,
     best_buy: u32,
 }
 
-impl Display for Market {
+impl Display for Book {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("\n");
         f.write_str(&format!("sells-- best:{}\n", self.best_sell));
-        for (key, value) in &self.sells {
-            if value.len() == 0 {
-                continue;
+        let mut sells = self.sells.keys().clone().collect::<Vec<&u32>>();
+        sells.sort();
+        sells.reverse();
+
+        for key in &sells {
+            if let Some(value) = self.sells.get(key) {
+                if value.total_amount == 0 {
+                    continue;
+                }
+
+                let formatted = format!("---> {}  at  {}\n", value.total_amount, value.price);
+                f.write_str(&formatted)?;
             }
-            let formatted = format!(
-                "---> {}  at  {}\n",
-                value.iter().sum::<u32>(),
-                key.to_string(),
-            );
-            f.write_str(&formatted)?;
         }
 
         // f.write_str(&format!(
@@ -80,14 +148,10 @@ impl Display for Market {
         f.write_str(&format!("buys-- best:{}\n", self.best_buy));
         for key in buys {
             if let Some(value) = self.buys.get(key) {
-                if value.len() == 0 {
+                if value.total_amount == 0 {
                     continue;
                 }
-                let formatted = format!(
-                    "---> {} at {}\n",
-                    value.iter().sum::<u32>(),
-                    key.to_string(),
-                );
+                let formatted = format!("---> {} at {}\n", value.total_amount, value.price);
                 f.write_str(&formatted)?;
             }
         }
@@ -96,257 +160,314 @@ impl Display for Market {
     }
 }
 
-impl Market {
+impl Book {
     fn new() -> Self {
-        Market {
-            orders_ids: HashMap::new(),
-            buys: HashMap::new(),
-            sells: HashMap::new(),
+        Book {
+            orders: BTreeMap::new(),
+            buys: BTreeMap::new(),
+            sells: BTreeMap::new(),
             best_sell: u32::MAX,
             best_buy: 0,
         }
     }
 
-    fn order(&mut self, intent: OrderIntent) -> Order {
-        let id = 1;
-
+    fn place(&mut self, intent: OrderIntent) -> PlacementResult {
         match intent.side {
-            Side::Buy => todo!(),
-            Side::Sell => todo!(),
+            Side::Buy => self.buy(intent),
+            Side::Sell => self.sell(intent),
         }
     }
 
-    fn buy(&mut self, intent: OrderIntent) -> Option<&Order> {
+    fn buy(&mut self, intent: OrderIntent) -> PlacementResult {
         let mut amount = intent.amount;
-        let mut price_level = self.best_sell;
+        let mut filled_places = vec![];
+        let iter = self.sells.iter_mut();
 
-        while price_level < intent.price {
-            if let Some(level) = self.sells.get_mut(&price_level) {
-                let result = self.match_level(level, &mut amount);
+        for (_, level) in iter {
+            if level.price <= intent.price {
+                println!("level {}, matching {}", level.price, amount);
+                let orders = &mut self.orders;
+                let result = level.matching(orders, &mut amount);
 
                 match result {
-                    MatchResult::Matched(orders) => {
-                        for order in orders {
-                            self.orders_ids.remove(&order);
+                    MatchResult::Matched(fills) => {
+                        for fill in fills {
+                            if fill.total_amount != fill.amount {
+                                continue;
+                            }
+                            println!("fill: {:?}", fill);
+                            if let Some(order) = self.orders.remove(&fill.order_id) {
+                                filled_places.push(order);
+                            }
                         }
                     }
-                    MatchResult::None => continue,
+                    MatchResult::None => {}
                 }
             }
-            if amount == 0 {
+
+            if amount == 0 && !level.orders.is_empty() {
+                self.best_buy = level.price;
                 break;
             }
-
-            price_level += 1
         }
-        let mut keys: Vec<u32> = self.sells.keys().copied().collect();
-        keys.sort_unstable();
 
-        for key in &keys {
-            if key < &price_level {
-                continue;
-            }
-
-            let Some(level) = self.sells.get(&key) else {
-                continue;
-            };
-            if !level.is_empty() {
-                self.best_sell = *key;
-                return None;
-            }
-        }
+        let order = Order {
+            id: Uuid::now_v7(),
+            side: intent.side,
+            amount,
+            price: intent.price,
+        };
 
         if amount > 0 {
-            let order_id = Uuid::now_v7();
-            let order = Order {
-                id: order_id,
-                amount: intent.amount,
-                price: intent.price,
-            };
-
-            self.buys
-                .entry(intent.price)
-                .or_default()
-                .push_front(order_id);
-            self.orders_ids.entry(order_id).or_insert(order);
-            if intent.price > self.best_buy {
-                self.best_buy = intent.price;
+            if order.price > self.best_buy {
+                self.best_buy = order.price;
             }
 
-            return self.orders_ids.get(&order_id);
+            let level = self.buys.entry(order.price).or_insert(Level {
+                price: order.price,
+                total_amount: 0,
+                orders: VecDeque::with_capacity(10),
+            });
+            level.orders.push_front(order.id);
+            level.total_amount += amount;
+
+            self.orders.entry(order.id).or_insert(order.clone());
         }
 
-        self.best_sell = 0;
-        None
+        PlacementResult {
+            order,
+            fills: if !filled_places.is_empty() {
+                Some(filled_places)
+            } else {
+                None
+            },
+        }
     }
 
-    fn sell(&mut self, intent: OrderIntent) -> Option<&Order> {
+    fn sell(&mut self, intent: OrderIntent) -> PlacementResult {
         let mut amount = intent.amount;
-        let mut price_level = self.best_buy;
+        let mut filled_places = vec![];
+        let iter = self.buys.iter_mut().rev();
 
-        while price_level >= intent.price {
-            if let Some(level) = self.buys.get_mut(&price_level) {
-                let result = self.match_level(level, &mut amount);
+        for (_, level) in iter {
+            if level.price >= intent.price {
+                let orders = &mut self.orders;
+                let result = level.matching(orders, &mut amount);
 
                 match result {
-                    MatchResult::Matched(orders) => {
-                        for order in orders {
-                            self.orders_ids.remove(&order);
+                    MatchResult::Matched(fills) => {
+                        for fill in fills {
+                            if fill.total_amount != fill.amount {
+                                continue;
+                            }
+                            println!("fill: {:?}", fill);
+                            if let Some(order) = self.orders.remove(&fill.order_id) {
+                                filled_places.push(order);
+                            }
                         }
                     }
-                    MatchResult::None => continue,
+                    MatchResult::None => {}
                 }
             }
 
-            if amount == 0 {
+            if amount == 0 && !level.orders.is_empty() {
+                self.best_buy = level.price;
                 break;
             }
-            price_level -= 1;
         }
 
-        let mut keys: Vec<u32> = self.buys.keys().copied().collect();
-        keys.sort_unstable();
-
-        for key in keys.into_iter().rev() {
-            if key > price_level {
-                continue;
-            }
-
-            let Some(level) = self.buys.get(&key) else {
-                continue;
-            };
-            if !level.is_empty() {
-                self.best_buy = key;
-            }
-        }
+        let order = Order {
+            id: Uuid::now_v7(),
+            side: intent.side,
+            amount,
+            price: intent.price,
+        };
 
         if amount > 0 {
-            let order_id = Uuid::now_v7();
-            let order = Order {
-                id: order_id,
-                amount: intent.amount,
-                price: intent.price,
-            };
-
-            self.sells
-                .entry(intent.price)
-                .or_default()
-                .push_front(order_id);
-            self.orders_ids.entry(order.id).or_insert(order);
-            if intent.price < self.best_sell {
-                self.best_sell = intent.price;
+            if order.price < self.best_sell {
+                self.best_sell = order.price;
             }
 
-            return self.orders_ids.get(&order_id);
+            let level = self.sells.entry(order.price).or_insert(Level {
+                price: order.price,
+                total_amount: 0,
+                orders: VecDeque::with_capacity(10),
+            });
+            level.orders.push_front(order.id);
+            level.total_amount += amount;
+            self.orders.entry(order.id).or_insert(order.clone());
         }
 
-        self.best_buy = 0;
-
-        None
+        PlacementResult {
+            order,
+            fills: if !filled_places.is_empty() {
+                Some(filled_places)
+            } else {
+                None
+            },
+        }
     }
 
-    fn match_level(&mut self, orders: &mut VecDeque<OrderId>, amount: &mut u32) -> MatchResult {
-        if orders.len() == 0 {
-            return MatchResult::None;
-        }
+    fn cancel(&mut self, order_id: &OrderId) -> Option<Order> {
+        if let Some(order) = self.orders.remove(order_id) {
+            let Some(level) = (match order.side {
+                Side::Buy => self.buys.get_mut(&order.price),
+                Side::Sell => self.sells.get_mut(&order.price),
+            }) else {
+                return Some(order);
+            };
 
-        let mut i = 0;
-        let mut matched = vec![];
+            if let Some(idx) = level.orders.iter().position(|x| x == order_id) {
+                level.orders.remove(idx);
+                level.total_amount -= order.amount;
 
-        while i < orders.len() {
-            if *amount == 0 {
-                break;
+                return Some(order);
             }
-
-            if let Some(order) = self.orders_ids.get_mut(&orders[i]) {
-                let taker_amount = min(order.amount, *amount);
-
-                order.amount -= taker_amount;
-                *amount -= taker_amount;
-
-                if order.amount == 0 {
-                    if let Some(order) = orders.remove(i) {
-                        matched.push(order);
-                    }
-                }
-            }
-
-            i += 1
         }
-
-        if matched.len() == 0 {
-            return MatchResult::None;
-        }
-
-        return MatchResult::Matched(matched);
+        None
     }
 }
 
-// #[test]
-// fn test_should_update_best_buy() {
-//     let mut market = Market::new();
-//
-//     market.buy(12, 5);
-//
-//     assert_eq!(market.best_buy, 5);
-//
-//     market.buy(20, 4);
-//
-//     assert_eq!(market.best_buy, 5);
-//
-//     market.sell(15, 4);
-//
-//     assert_eq!(market.buys.get(&5).unwrap().len(), 0);
-//     assert_eq!(market.buys.get(&4).unwrap()[0], 17);
-//     assert_eq!(market.best_buy, 4);
-//
-//     market.sell(2, 4);
-//     market.sell(17, 4);
-//
-//     assert_eq!(market.buys.get(&4).unwrap().len(), 0);
-//     assert_eq!(market.sells.get(&4).unwrap()[0], 2);
-//     println!("mm: {}", market);
-// }
-
 fn main() {
-    let mut market = Market::new();
-    //
+    let mut market = Book::new();
+    // let mut places = vec![];
+
     // market.sell(5, 11);
+    market.place(OrderIntent {
+        side: Side::Sell,
+        price: 11,
+        amount: 5,
+    });
+
     // market.sell(13, 10);
+    market.place(OrderIntent {
+        side: Side::Sell,
+        price: 10,
+        amount: 13,
+    });
     // market.sell(2, 7);
+    market.place(OrderIntent {
+        side: Side::Sell,
+        price: 7,
+        amount: 2,
+    });
     // market.sell(10, 6);
+    market.place(OrderIntent {
+        side: Side::Sell,
+        price: 6,
+        amount: 10,
+    });
     //
-    // println!("market {}", market);
+    //
+    println!("market {}", market);
     //
     // market.buy(13, 9);
+    market.place(OrderIntent {
+        side: Side::Buy,
+        price: 9,
+        amount: 13,
+    });
     // market.buy(53, 4);
+    market.place(OrderIntent {
+        side: Side::Buy,
+        price: 4,
+        amount: 53,
+    });
     // market.buy(100, 2);
+    market.place(OrderIntent {
+        side: Side::Buy,
+        price: 2,
+        amount: 100,
+    });
     //
-    // println!("market {}", market);
-    // market.sell(63, 3);
-    // println!("market {}", market);
-    // market.buy(9, 10);
+    println!("market {}", market);
+    // // market.sell(63, 3);
+    market.place(OrderIntent {
+        side: Side::Sell,
+        price: 3,
+        amount: 63,
+    }); // rest 9 at price 3
+    println!("market {}", market);
+    // // // // market.buy(9, 10);
+    market.place(OrderIntent {
+        side: Side::Buy,
+        price: 10,
+        amount: 10,
+    }); //rest 1 at price 10
+    println!("market {}", market);
     // market.buy(12, 9);
-    // println!("market {}", market);
-    // market.sell(12, 5);
-    // println!("market {}", market);
-    // market.sell(100, 1);
-    // println!("market {}", market);
-    // market.sell(12, 3); // 12 at 3
-    // market.sell(15, 5); // 15 at 5
+    market.place(OrderIntent {
+        side: Side::Buy,
+        price: 9,
+        amount: 12,
+    }); // rest 12 at price 9
+    println!("market {}", market);
+    // // // // // market.sell(12, 5);
+    market.place(OrderIntent {
+        side: Side::Sell,
+        price: 5,
+        amount: 12,
+    }); // no rest, leave  1 at 9
+    println!("market {}", market);
+    // // // // market.sell(100, 1);
+    market.place(OrderIntent {
+        side: Side::Sell,
+        price: 1,
+        amount: 100,
+    }); // buy 1 at 9, no rest
+    println!("market {}", market);
+    // // market.cancel(&first.order.id);
+    // // println!("market {}", market);
+    // //
+    // // market.cancel(&second.order.id);
+    // // println!("market {}", market);
     //
-    // println!("market {}", market);
+    // market.sell(12, 3); // 12 at 3
+    market.place(OrderIntent {
+        side: Side::Sell,
+        price: 3,
+        amount: 12,
+    });
+    // market.sell(15, 5); // 15 at 5
+    market.place(OrderIntent {
+        side: Side::Sell,
+        price: 5,
+        amount: 15,
+    });
+    //
+    println!("market {}", market);
     //
     // market.buy(100, 11); //  10 buy at 11
-    // market.buy(352, 1); //  352 buy at 1
+    market.place(OrderIntent {
+        side: Side::Buy,
+        price: 11,
+        amount: 100,
+    });
+    println!("market {}", market);
+    // // market.buy(352, 1); //  352 buy at 1
+    market.place(OrderIntent {
+        side: Side::Buy,
+        price: 1,
+        amount: 352,
+    });
     //
-    // println!("market {}", market);
+    println!("market {}", market);
+    // //
+    // // market.sell(173, 5); // 8 - 15 = -7 = 7 sell at 5
+    market.place(OrderIntent {
+        side: Side::Sell,
+        price: 5,
+        amount: 173,
+    });
     //
-    // market.sell(173, 5); // 8 - 15 = -7 = 7 sell at 5
-    //
-    // println!("market 173 {}", market);
-    //
-    // market.buy(400, 15); //  352 buy at 1
+    println!("market 173 {}", market);
+    // //
+    // // market.buy(400, 15); //  352 buy at 1
+    // market.place(PlaceIntent {
+    //     side: Side::Buy,
+    //     price: 15,
+    //     amount: 400,
+    // });
     // println!("market {}", market);
     println!("Hello, world!");
 }
