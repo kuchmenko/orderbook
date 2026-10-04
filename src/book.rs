@@ -1,6 +1,6 @@
 use std::{
     cmp::min,
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, VecDeque, btree_map::IterMut},
     fmt::Display,
 };
 
@@ -126,8 +126,8 @@ pub struct Book {
     pub buys: BTreeMap<Price, Level>,
     pub sells: BTreeMap<Price, Level>,
 
-    pub best_sell: u32,
-    pub best_buy: u32,
+    pub best_sell: Price,
+    pub best_buy: Price,
 }
 
 impl Display for Book {
@@ -191,110 +191,39 @@ impl Book {
         }
     }
 
-    fn buy(&mut self, order: Order) -> PlacementResult {
+    fn process_order<'a>(
+        side: Side,
+        makers: impl Iterator<Item = (&'a Price, &'a mut Level)>,
+        takers: &mut BTreeMap<Price, Level>,
+        orders: &mut BTreeMap<OrderId, Order>,
+        best_ask: &mut Price,
+        best_bid: &mut Price,
+        order: Order,
+    ) -> PlacementResult {
         let mut order = order;
         let mut amount = order.amount;
         let mut filled_places = vec![];
-        let iter = self.sells.iter_mut();
         let mut is_empty = false;
 
-        for (_, level) in iter {
-            self.best_sell = level.price;
-            if level.price <= order.price && amount > 0 {
-                let orders = &mut self.orders;
+        for (_, level) in makers {
+            *best_ask = level.price;
+            if match side {
+                Side::Buy => order.price >= level.price,
+                Side::Sell => order.price <= level.price,
+            } {
                 let result = level.matching(orders, &mut amount);
 
                 match result {
                     MatchResult::Matched(fills) => {
                         for fill in fills {
-                            println!("fill {:?}", fill);
                             let order = if fill.is_full() {
-                                self.orders.remove(&fill.order_id)
+                                orders.remove(&fill.order_id)
                             } else {
-                                self.orders.get(&fill.order_id).cloned()
+                                orders.get(&fill.order_id).cloned()
                             };
 
                             if let Some(order) = order {
                                 filled_places.push(OrderFill { order, fill });
-                            } else {
-                                println!("wtf");
-                            }
-                        }
-                    }
-                    MatchResult::None => {}
-                }
-            }
-
-            is_empty = level.orders.is_empty();
-
-            if amount == 0 && !level.orders.is_empty() {
-                break;
-            }
-        }
-
-        if is_empty {
-            self.best_sell = u32::MAX;
-        }
-
-        if amount > 0 {
-            if order.price > self.best_buy {
-                self.best_buy = order.price;
-            }
-
-            order.amount = amount;
-
-            let level = self.buys.entry(order.price).or_insert(Level {
-                price: order.price,
-                total_amount: 0,
-                orders: VecDeque::with_capacity(10),
-            });
-            level.orders.push_back(order.id);
-            level.total_amount += amount;
-
-            self.orders.entry(order.id).or_insert(order.clone());
-        }
-
-        println!("buy filled sells: {:?}", filled_places);
-
-        PlacementResult {
-            order,
-            fills: if !filled_places.is_empty() {
-                Some(filled_places)
-            } else {
-                None
-            },
-        }
-    }
-
-    fn sell(&mut self, order: Order) -> PlacementResult {
-        let mut order = order;
-        let mut amount = order.amount;
-        let mut filled_places = vec![];
-        let iter = self.buys.iter_mut().rev();
-        let mut is_empty = false;
-
-        for (_, level) in iter {
-            self.best_buy = level.price;
-            if level.price >= order.price {
-                // limit
-                let orders = &mut self.orders;
-                let result = level.matching(orders, &mut amount);
-
-                match result {
-                    MatchResult::Matched(fills) => {
-                        for fill in fills {
-                            println!("buy fill: {:?}, is full: {}", fill, fill.is_full());
-
-                            let order = if fill.is_full() {
-                                self.orders.remove(&fill.order_id)
-                            } else {
-                                self.orders.get(&fill.order_id).cloned()
-                            };
-
-                            if let Some(order) = order {
-                                filled_places.push(OrderFill { order, fill });
-                            } else {
-                                println!("wtf");
                             }
                         }
                     }
@@ -310,29 +239,38 @@ impl Book {
         }
 
         if is_empty {
-            self.best_buy = 0
+            *best_ask = match side {
+                Side::Buy => u32::MAX,
+                Side::Sell => 0,
+            }
         }
 
         if amount > 0 {
-            if order.price < self.best_sell {
-                self.best_sell = order.price;
+            match side {
+                Side::Buy => {
+                    if order.price > *best_bid {
+                        *best_bid = order.price;
+                    }
+                }
+                Side::Sell => {
+                    if order.price < *best_bid {
+                        *best_bid = order.price;
+                    }
+                }
             }
 
             order.amount = amount;
 
-            println!("sell order: {:?}", order);
-            let level = self.sells.entry(order.price).or_insert(Level {
+            let level = takers.entry(order.price).or_insert(Level {
                 price: order.price,
                 total_amount: 0,
                 orders: VecDeque::with_capacity(10),
             });
             level.orders.push_back(order.id);
             level.total_amount += amount;
-            self.orders.entry(order.id).or_insert(order.clone());
+            orders.entry(order.id).or_insert(order.clone());
         }
 
-        println!("book.orders: {:?}", self.orders);
-        println!("sells filled buys: {:?}", filled_places);
         PlacementResult {
             order,
             fills: if !filled_places.is_empty() {
@@ -341,6 +279,30 @@ impl Book {
                 None
             },
         }
+    }
+
+    fn buy(&mut self, order: Order) -> PlacementResult {
+        let makers = self.sells.iter_mut();
+        let takers = &mut self.buys;
+        let orders = &mut self.orders;
+        let best_ask = &mut self.best_sell;
+        let best_bid = &mut self.best_buy;
+
+        Self::process_order(
+            order.side, makers, takers, orders, best_ask, best_bid, order,
+        )
+    }
+
+    fn sell(&mut self, order: Order) -> PlacementResult {
+        let makers = self.buys.iter_mut().rev();
+        let takers = &mut self.sells;
+        let orders = &mut self.orders;
+        let best_ask = &mut self.best_buy;
+        let best_bid = &mut self.best_sell;
+
+        Self::process_order(
+            order.side, makers, takers, orders, best_ask, best_bid, order,
+        )
     }
 
     pub fn cancel(&mut self, order_id: &OrderId) -> Option<Order> {
