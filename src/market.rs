@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{book::Book, id::EpochSequenceId};
 
-#[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Hash, Display)]
+#[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Hash, Display, serde::Deserialize)]
 #[display("{_0}")]
 pub struct MarketId(pub Uuid);
 

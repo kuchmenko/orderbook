@@ -60,13 +60,13 @@ impl Level {
     }
 }
 
-#[derive(Debug, Copy, Clone, Ord, PartialEq, PartialOrd, Eq, Hash, Display)]
+#[derive(Debug, Copy, Clone, Ord, PartialEq, PartialOrd, Eq, Hash, Display, serde::Deserialize)]
 #[display("OrderId[{_0}]")]
 pub struct OrderId(pub EpochSequenceId);
 
 type Price = u32;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
 pub enum Side {
     Buy,
     Sell,
@@ -80,7 +80,7 @@ pub struct Order {
     pub amount: u32,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, serde::Deserialize)]
 pub struct OrderIntent {
     pub side: Side,
     pub price: Price,
@@ -128,49 +128,6 @@ pub struct Book {
 
     pub best_sell: Price,
     pub best_buy: Price,
-}
-
-impl Display for Book {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("\n");
-        f.write_str(&format!("sells-- best:{}\n", self.best_sell));
-        let mut sells = self.sells.keys().clone().collect::<Vec<&u32>>();
-        sells.sort();
-        sells.reverse();
-
-        for key in &sells {
-            if let Some(value) = self.sells.get(key) {
-                if value.total_amount == 0 {
-                    continue;
-                }
-
-                let formatted = format!("---> {}  at  {}\n", value.total_amount, value.price);
-                f.write_str(&formatted)?;
-            }
-        }
-
-        // f.write_str(&format!(
-        //     "\n\n SPREAD: {} \n\n",
-        //     self.best_buy - self.best_sell,
-        // ))?;
-
-        let mut buys = self.buys.keys().clone().collect::<Vec<&u32>>();
-        buys.sort();
-        buys.reverse();
-
-        f.write_str(&format!("buys-- best:{}\n", self.best_buy));
-        for key in buys {
-            if let Some(value) = self.buys.get(key) {
-                if value.total_amount == 0 {
-                    continue;
-                }
-                let formatted = format!("---> {} at {}\n", value.total_amount, value.price);
-                f.write_str(&formatted)?;
-            }
-        }
-
-        Ok(())
-    }
 }
 
 impl Book {

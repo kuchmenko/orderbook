@@ -2,7 +2,7 @@ use std::{fmt::Display, ops::Add};
 
 use derive_more::Display;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Display)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Display, serde::Deserialize)]
 #[display("{epoch}:{sequence}")]
 pub struct EpochSequenceId {
     pub epoch: u32,

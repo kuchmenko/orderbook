@@ -4,9 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.104"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
 derive_more = { version = "2", features = ["display"] }
 thiserror = { version = "2.0.21", features = [] }
-uuid = { version = "1.26.1", features = ["v7"] }
+uuid = { version = "1.26.1", features = ["v7", "serde"] }
+serde = "1.0.229"
+serde_json = "1.0.151"
+
 tokio = { version = "1.53.2", features = ["full"] }
+tokio-util = "0.7.19"
+
+rdkafka = { version = "0.39.0", features = ["cmake-build"] }
