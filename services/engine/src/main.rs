@@ -20,7 +20,7 @@ use crate::{
 };
 
 async fn handle_incomming_message<'a>(
-    message: BorrowedMessage<'a>,
+    message: &BorrowedMessage<'a>,
     input_tx: mpsc::Sender<Input>,
 ) -> anyhow::Result<()> {
     let Some(payload) = message.payload() else {
@@ -35,7 +35,7 @@ async fn handle_incomming_message<'a>(
         },
         Err(err) => {
             tracing::error!(?message, ?err, "parse payload");
-            return Ok(());
+            return Err(err.into());
         }
     }
 
@@ -60,8 +60,11 @@ async fn run_listener(
             message = consumer.recv() => {
                 match message {
                     Ok(msg) => {
-                        if let Err(err) = handle_incomming_message(msg, input_tx.clone()).await {
+                        if let Err(err) = handle_incomming_message(&msg, input_tx.clone()).await {
                             tracing::error!(%err, "handle engine input");
+                            if let Err(err) = consumer.commit_message(&msg, rdkafka::consumer::CommitMode::Sync) {
+                                tracing::error!(%err, "commit message");
+                            }
                             break;
                         }
                     },

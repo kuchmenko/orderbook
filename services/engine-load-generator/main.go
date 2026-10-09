@@ -33,11 +33,11 @@ type (
 	Amount uint32
 )
 
-type Side int
+type Side string
 
 const (
-	SideBuy  Side = 0
-	SideSell Side = 1
+	SideBuy  Side = "Buy"
+	SideSell Side = "Sell"
 )
 
 type CreateMarket struct {
