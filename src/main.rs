@@ -5,7 +5,6 @@ mod market;
 
 use rdkafka::{
     ClientConfig, Message,
-    client::Client,
     consumer::{Consumer, StreamConsumer},
     message::BorrowedMessage,
 };
@@ -28,12 +27,12 @@ async fn handle_incomming_message<'a>(
     };
 
     match serde_json::from_slice::<Input>(payload) {
-        Ok(input) => match input_tx.try_send(input) {
+        Ok(input) => match input_tx.try_send(input.clone()) {
             Ok(_) => tracing::debug!(?input, "sent input"),
             Err(err) => tracing::error!(?input, %err, "sent input"),
         },
         Err(err) => {
-            tracing::error!(?message, "parse payload");
+            tracing::error!(?message, %err, "parse payload");
             return Ok(());
         }
     }
@@ -57,17 +56,19 @@ async fn run_listener(
         tokio::select! {
             message = consumer.recv() => {
                 match message {
-                    Ok(msg) => msg.payload(),
+                    Ok(msg) => handle_incomming_message(msg, input_tx.clone()),
                     Err(err) => {
-                        tracing::error!(%err, "consume engine input"),
+                        tracing::error!(%err, "consume engine input");
+                        break;
                     },
                 }
 
             },
             _ = shutdown.cancelled() => {
                 tracing::info!("Shutting down input listener");
+                break;
             },
-        }
+        };
     }
     drop(input_tx);
 
@@ -85,7 +86,7 @@ async fn main() {
     let shutdown = CancellationToken::new();
     let input_listener_shutdown = shutdown.clone();
 
-    let (input_tx, mut input_rx) = mpsc::channel::<Input>(100);
+    let (input_tx, input_rx) = mpsc::channel::<Input>(100);
     let (output_tx, mut output_rx) = mpsc::channel::<Output>(100);
     let id_generator = EpochSequenceIdGenerator::new();
     let output_id_generator = EpochSequenceIdGenerator::new();
@@ -112,7 +113,7 @@ async fn main() {
 
     tokio::signal::ctrl_c().await.unwrap();
     shutdown.cancel();
-    tokio::join!(
+    let _ = tokio::join!(
         input_listener_handler,
         output_publisher_handler,
         engine_wait,

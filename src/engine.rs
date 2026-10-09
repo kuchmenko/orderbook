@@ -15,19 +15,19 @@ pub enum EngineError {
     MarketNotFound(MarketId),
 }
 
-#[derive(Debug, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct CreateMarket {
     pub market_id: MarketId,
     // options?
 }
 
-#[derive(Debug, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct PlaceOrder {
     pub market_id: MarketId,
     pub intent: OrderIntent,
     // options?
 }
-#[derive(Debug, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct CancelOrder {
     pub market_id: MarketId,
     pub order_id: OrderId,
@@ -37,13 +37,13 @@ pub struct CancelOrder {
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, serde::Deserialize)]
 pub struct InputId(pub EpochSequenceId);
 
-#[derive(Debug, PartialEq, serde::Deserialize)]
+#[derive(Debug, PartialEq, Clone, serde::Deserialize)]
 pub struct Input {
     id: InputId,
     kind: InputKind,
 }
 
-#[derive(Debug, PartialEq, serde::Deserialize)]
+#[derive(Debug, PartialEq, Clone, serde::Deserialize)]
 pub enum InputKind {
     CreateMarket(CreateMarket),
     PlaceOrder(PlaceOrder),

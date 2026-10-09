@@ -1,8 +1,7 @@
 use derive_more::Display;
-use tracing_subscriber::field::display;
 use uuid::Uuid;
 
-use crate::{book::Book, id::EpochSequenceId};
+use crate::book::Book;
 
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Hash, Display, serde::Deserialize)]
 #[display("{_0}")]

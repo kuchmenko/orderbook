@@ -1,7 +1,6 @@
 use std::{
     cmp::min,
-    collections::{BTreeMap, VecDeque, btree_map::IterMut},
-    fmt::Display,
+    collections::{BTreeMap, VecDeque},
 };
 
 use derive_more::Display;
@@ -80,7 +79,7 @@ pub struct Order {
     pub amount: u32,
 }
 
-#[derive(Debug, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct OrderIntent {
     pub side: Side,
     pub price: Price,
