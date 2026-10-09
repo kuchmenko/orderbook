@@ -5,6 +5,8 @@ mod market;
 
 use rdkafka::{
     ClientConfig, Message,
+    admin::{AdminClient, AdminOptions, NewTopic},
+    client::DefaultClientContext,
     consumer::{Consumer, StreamConsumer},
     message::BorrowedMessage,
 };
@@ -32,7 +34,7 @@ async fn handle_incomming_message<'a>(
             Err(err) => tracing::error!(?input, %err, "sent input"),
         },
         Err(err) => {
-            tracing::error!(?message, %err, "parse payload");
+            tracing::error!(?message, ?err, "parse payload");
             return Ok(());
         }
     }
@@ -45,18 +47,24 @@ async fn run_listener(
     input_tx: mpsc::Sender<Input>,
 ) -> anyhow::Result<()> {
     let consumer: StreamConsumer = ClientConfig::new()
-        .set("bootstrap.servers", "localhost:9092")
+        .set("bootstrap.servers", "127.0.0.1:9092")
         .set("group.id", "rust-playground")
         .set("auto.offset.reset", "earliest")
         .set("enable.auto.commit", "false")
         .set("enable.auto.offset.store", "false")
         .create()?;
-    consumer.subscribe(&["engine-input"]);
+    consumer.subscribe(&["engine-input"])?;
+    println!("We're good with kafka");
     loop {
         tokio::select! {
             message = consumer.recv() => {
                 match message {
-                    Ok(msg) => handle_incomming_message(msg, input_tx.clone()),
+                    Ok(msg) => {
+                        if let Err(err) = handle_incomming_message(msg, input_tx.clone()).await {
+                            tracing::error!(%err, "handle engine input");
+                            break;
+                        }
+                    },
                     Err(err) => {
                         tracing::error!(%err, "consume engine input");
                         break;
@@ -70,7 +78,46 @@ async fn run_listener(
             },
         };
     }
+    println!("dropping input tx");
     drop(input_tx);
+
+    Ok(())
+}
+
+async fn ensure_topics() -> anyhow::Result<()> {
+    let admin: AdminClient<DefaultClientContext> = ClientConfig::new()
+        .set("bootstrap.servers", "127.0.0.1:9092")
+        .create()?;
+
+    let topics = [
+        NewTopic::new(
+            "engine-input",
+            1,
+            rdkafka::admin::TopicReplication::Fixed(1),
+        ),
+        NewTopic::new(
+            "engine-output",
+            1,
+            rdkafka::admin::TopicReplication::Fixed(1),
+        ),
+    ];
+
+    let Ok(results) = admin.create_topics(&topics, &AdminOptions::new()).await else {
+        anyhow::bail!("Create topics has failed")
+    };
+
+    for result in results {
+        match result {
+            Ok(res) => {
+                tracing::info!(%res, "topic was created");
+            }
+            Err((topic, rdkafka::types::RDKafkaErrorCode::TopicAlreadyExists)) => {}
+            Err((topic, err)) => {
+                tracing::error!(%topic, %err, "topic was not created");
+                return Err(anyhow::Error::new(err));
+            }
+        }
+    }
 
     Ok(())
 }
@@ -83,6 +130,7 @@ async fn main() {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+    ensure_topics().await;
     let shutdown = CancellationToken::new();
     let input_listener_shutdown = shutdown.clone();
 
@@ -111,13 +159,29 @@ async fn main() {
     });
     let engine_wait = tokio::task::spawn_blocking(move || engine_handle.join());
 
-    tokio::signal::ctrl_c().await.unwrap();
-    shutdown.cancel();
-    let _ = tokio::join!(
-        input_listener_handler,
-        output_publisher_handler,
-        engine_wait,
-    );
+    let tasks = async {
+        tokio::join!(
+            input_listener_handler,
+            output_publisher_handler,
+            engine_wait,
+        )
+    };
+    tokio::pin!(tasks);
+
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => {
+            if let Err(err) = result {
+                tracing::error!(%err, "listen for CTRL+C");
+            }
+        tracing::info!("Shutting down system and tasks");
+            shutdown.cancel();
+            tasks.await;
+        tracing::info!("Graceful shutdown is done");
+        }
+        results = &mut tasks => {
+            tracing::info!(?results, "All tasks finished");
+        }
+    }
 
     tracing::info!("System offline")
 }
