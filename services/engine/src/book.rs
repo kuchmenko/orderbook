@@ -59,19 +59,31 @@ impl Level {
     }
 }
 
-#[derive(Debug, Copy, Clone, Ord, PartialEq, PartialOrd, Eq, Hash, Display, serde::Deserialize)]
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Eq,
+    Hash,
+    Display,
+    serde::Deserialize,
+    serde::Serialize,
+)]
 #[display("OrderId[{_0}]")]
 pub struct OrderId(pub EpochSequenceId);
 
 type Price = u32;
 
-#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Side {
     Buy,
     Sell,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Order {
     pub id: OrderId,
     pub side: Side,
@@ -86,7 +98,7 @@ pub struct OrderIntent {
     pub amount: u32,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Fill {
     pub order_id: OrderId,
     pub price: u32,
@@ -100,7 +112,7 @@ impl Fill {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct OrderFill {
     pub order: Order,
     pub fill: Fill,

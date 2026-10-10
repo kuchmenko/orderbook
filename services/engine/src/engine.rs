@@ -34,7 +34,7 @@ pub struct CancelOrder {
     // options?
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, PartialOrd, serde::Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
 pub struct InputId(pub EpochSequenceId);
 
 #[derive(Debug, PartialEq, Clone, serde::Deserialize)]
@@ -50,39 +50,44 @@ pub enum InputKind {
     CancelOrder(CancelOrder),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct OrderPlacedOutput {
-    market_id: MarketId,
-    order: Order,
-    fills: Option<Vec<OrderFill>>,
+    pub market_id: MarketId,
+    pub order: Order,
+    pub fills: Option<Vec<OrderFill>>,
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct OrderCanceledOutput {
-    market_id: MarketId,
-    order: Option<Order>,
+    pub market_id: MarketId,
+    pub order: Option<Order>,
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct MarketCreatedOutput {
+    pub market_id: MarketId,
+}
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum OutputKind {
     OrderPlaced(OrderPlacedOutput),
     OrderCanceled(OrderCanceledOutput),
 
-    CreatedMarket(MarketId),
+    MarketCreated(MarketCreatedOutput),
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, Copy, Clone, PartialEq, PartialOrd, serde::Serialize)]
 pub struct OutputId(EpochSequenceId);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Output {
-    id: OutputId,
-    input_id: InputId,
-    kind: OutputKind,
+    pub id: OutputId,
+    pub input_id: InputId,
+    pub kind: OutputKind,
 }
 
 pub struct Engine {
     pub markets: HashMap<MarketId, Market>,
 
     pub input_ch: mpsc::Receiver<Input>,
+    pub input_ack_ch: mpsc::Sender<InputId>,
     pub output_ch: mpsc::Sender<Output>,
 
     pub order_ids_generator: EpochSequenceIdGenerator,
@@ -92,6 +97,7 @@ pub struct Engine {
 impl Engine {
     pub fn new(
         input: mpsc::Receiver<Input>,
+        input_ack_ch: mpsc::Sender<InputId>,
         output: mpsc::Sender<Output>,
         order_ids_generator: EpochSequenceIdGenerator,
         output_ids_generator: EpochSequenceIdGenerator,
@@ -99,6 +105,7 @@ impl Engine {
         Self {
             markets: HashMap::new(),
             input_ch: input,
+            input_ack_ch: input_ack_ch,
             output_ch: output,
             order_ids_generator,
             output_ids_generator,
@@ -129,6 +136,14 @@ impl Engine {
                         input_id: input.id,
                         kind: result,
                     };
+                    match self.input_ack_ch.blocking_send(input.id) {
+                        Ok(_) => {
+                            tracing::info!(input_id = ?input.id, "published input ack")
+                        }
+                        Err(err) => {
+                            tracing::error!(input_id = ?input.id, err = %err, "failed to publish input ack", );
+                        }
+                    }
                     match self.output_ch.blocking_send(output.clone()) {
                         Ok(_) => {
                             tracing::info!(input_id = ?input.id, ?output, "published result")
@@ -158,7 +173,9 @@ impl Engine {
             .entry(create_market.market_id)
             .or_insert(Market::new(create_market.market_id));
 
-        Ok(OutputKind::CreatedMarket(market.id))
+        Ok(OutputKind::MarketCreated(MarketCreatedOutput {
+            market_id: market.id,
+        }))
     }
 
     pub fn process_order(&mut self, placement: &PlaceOrder) -> Result<OutputKind, EngineError> {
@@ -213,9 +230,11 @@ mod tests {
 
     fn engine() -> Engine {
         let (_, input_rx) = mpsc::channel(1);
+        let (input_ack_tx, _) = mpsc::channel(1);
         let (output_tx, _) = mpsc::channel(1);
         Engine::new(
             input_rx,
+            input_ack_tx,
             output_tx,
             EpochSequenceIdGenerator::new(),
             EpochSequenceIdGenerator::new(),
@@ -283,7 +302,7 @@ mod tests {
                 engine
                     .create_market(&CreateMarket { market_id: id })
                     .unwrap(),
-                OutputKind::CreatedMarket(id),
+                OutputKind::MarketCreated(MarketCreatedOutput { market_id: id }),
             );
             let market = &engine.markets[&id];
             assert_eq!(market.id, id);
@@ -309,7 +328,7 @@ mod tests {
             engine
                 .create_market(&CreateMarket { market_id: id })
                 .unwrap(),
-            OutputKind::CreatedMarket(id),
+            OutputKind::MarketCreated(MarketCreatedOutput { market_id: id }),
         );
         assert_eq!(engine.markets.len(), 1);
         assert_eq!(engine.markets[&id].book.orders.len(), 1);
@@ -503,7 +522,7 @@ mod tests {
             Output {
                 id: OutputId(EpochSequenceId::new(4, 31)),
                 input_id: InputId(EpochSequenceId::new(9, 8)),
-                kind: OutputKind::CreatedMarket(id),
+                kind: OutputKind::MarketCreated(MarketCreatedOutput { market_id: id }),
             },
             Output {
                 id: OutputId(EpochSequenceId::new(4, 32)),
@@ -585,7 +604,7 @@ mod tests {
                 Some(Output {
                     id: OutputId(EpochSequenceId::new(0, sequence)),
                     input_id: InputId(EpochSequenceId::new(9, sequence)),
-                    kind: OutputKind::CreatedMarket(id),
+                    kind: OutputKind::MarketCreated(MarketCreatedOutput { market_id: id }),
                 })
             );
         }

@@ -3,7 +3,18 @@ use uuid::Uuid;
 
 use crate::book::Book;
 
-#[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Hash, Display, serde::Deserialize)]
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    PartialOrd,
+    Eq,
+    Hash,
+    Display,
+    serde::Deserialize,
+    serde::Serialize,
+)]
 #[display("{_0}")]
 pub struct MarketId(pub Uuid);
 

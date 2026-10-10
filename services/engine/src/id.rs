@@ -2,7 +2,19 @@ use std::ops::Add;
 
 use derive_more::Display;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Display, serde::Deserialize)]
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Display,
+    serde::Deserialize,
+    serde::Serialize,
+)]
 #[display("{epoch}:{sequence}")]
 pub struct EpochSequenceId {
     pub epoch: u32,
@@ -28,6 +40,13 @@ impl EpochSequenceIdGenerator {
     pub fn new() -> Self {
         Self {
             epoch: 0,
+            sequence: 0,
+        }
+    }
+
+    pub fn from_epoch(epoch: u32) -> Self {
+        Self {
+            epoch: epoch,
             sequence: 0,
         }
     }
